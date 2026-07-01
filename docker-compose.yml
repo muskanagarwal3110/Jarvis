@@ -1,0 +1,28 @@
+services:
+  ai-service_backend:
+    build:
+      context: ./ai-service_backend
+      dockerfile: Dockerfile
+    container_name: ai-trip-planner-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./ai-service_backend/.env
+    environment:
+      - FRONTEND_URL=http://localhost:5173
+    volumes:
+      - ./ai-service_backend/output:/app/output
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+    container_name: ai-trip-planner-frontend
+    ports:
+      - "5173:4173"
+    depends_on:
+      - ai-service_backend
+    restart: unless-stopped
