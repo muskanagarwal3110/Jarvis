@@ -1,12 +1,101 @@
 import os
+import re
 import datetime
 import markdown
 from xhtml2pdf import pisa
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+# ---------------------------------------------------------------------------
+# Register a Unicode-capable font once, at import time.
+# xhtml2pdf/reportlab's built-in fonts (Helvetica, Times, Courier) are
+# limited to a narrow Latin-1-ish subset. Anything outside that -- ₹, →, –, —,
+# curly quotes, etc. -- silently falls back to a "missing glyph" box.
+# DejaVu Sans covers all of those.
+# ---------------------------------------------------------------------------
+# Bundled with the project (works identically on Windows/Linux/Docker) --
+# no OS package manager or system font install required.
+# NOTE: this file lives in utils/, but fonts/ sits at the project root,
+# so we go up one extra directory level.
+_FONT_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fonts"
+)
+_FONT_REGULAR = os.path.join(_FONT_DIR, "DejaVuSans.ttf")
+_FONT_BOLD = os.path.join(_FONT_DIR, "DejaVuSans-Bold.ttf")
+_FONT_ITALIC = os.path.join(_FONT_DIR, "DejaVuSans-Oblique.ttf")
+_FONT_BOLDITALIC = os.path.join(_FONT_DIR, "DejaVuSans-BoldOblique.ttf")
+
+_FONT_REGISTERED = False
+
+
+def _register_fonts():
+    global _FONT_REGISTERED
+    if _FONT_REGISTERED:
+        return
+    if not os.path.exists(_FONT_REGULAR):
+        # Font not present on this system -- fall back silently to Helvetica.
+        # (install with: apt-get install -y fonts-dejavu-core)
+        return
+    pdfmetrics.registerFont(TTFont("DejaVuSans", _FONT_REGULAR))
+    pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", _FONT_BOLD))
+    pdfmetrics.registerFont(TTFont("DejaVuSans-Oblique", _FONT_ITALIC))
+    pdfmetrics.registerFont(TTFont("DejaVuSans-BoldOblique", _FONT_BOLDITALIC))
+    _FONT_REGISTERED = True
+
+
+# ---------------------------------------------------------------------------
+# Text sanitization
+# ---------------------------------------------------------------------------
+# Characters that even a full Unicode text font can't render meaningfully
+# (color emoji glyphs) -- strip these or swap for a plain-text equivalent
+# instead of leaving them for the renderer to box-glyph.
+_EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"  # symbols & pictographs, emoticons, transport, supplemental
+    "\U00002600-\U000027BF"  # misc symbols & dingbats
+    "\U0001F1E6-\U0001F1FF"  # regional indicator (flags)
+    "\U00002190-\U000021FF"  # arrows block is FINE in DejaVu, don't strip
+    "]+",
+    flags=re.UNICODE,
+)
+# Remove the arrows range from the strip pattern above -- DejaVu renders
+# arrows correctly, we only want to strip true emoji/pictograph ranges.
+_EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"
+    "\U00002600-\U000026FF"
+    "\U00002700-\U000027BF"
+    "\U0001F1E6-\U0001F1FF"
+    "\U0001F900-\U0001F9FF"
+    "]+",
+    flags=re.UNICODE,
+)
+
+_REPLACEMENTS = {
+    "\u2018": "'", "\u2019": "'",      # curly single quotes
+    "\u201c": '"', "\u201d": '"',      # curly double quotes
+    "\u2013": "-", "\u2014": "-",      # en/em dash -> hyphen (optional; DejaVu can render these fine,
+                                        # but plain hyphen is safest across fonts)
+    "\u2026": "...",                    # ellipsis
+    "\u00a0": " ",                       # non-breaking space
+}
+
+
+def sanitize_text(text: str) -> str:
+    """Strip characters that no PDF text font can render (emoji/pictographs)
+    and normalize a few typographic characters. Keeps ₹, →, and other
+    Unicode punctuation intact since DejaVu Sans renders those fine."""
+    if not text:
+        return text
+    text = _EMOJI_PATTERN.sub("", text)
+    for bad, good in _REPLACEMENTS.items():
+        text = text.replace(bad, good)
+    return text
 
 
 def build_markdown_content(response_text: str) -> str:
     """Build the formatted markdown content with metadata header."""
-    return f"""# 🌍 AI Travel Plan
+    return f"""# AI Travel Plan
 
 **Generated:** {datetime.datetime.now().strftime('%Y-%m-%d at %H:%M')}
 **Created by:** Jarvis
@@ -44,22 +133,40 @@ def save_document(response_text: str, directory: str = "./output") -> str | None
 def save_document_as_pdf(response_text: str, directory: str = "./output") -> str | None:
     """Export travel plan to a PDF file."""
     os.makedirs(directory, exist_ok=True)
-    markdown_content = build_markdown_content(response_text)
+
+    _register_fonts()
+    font_family = "DejaVuSans" if _FONT_REGISTERED else "Helvetica"
+
+    clean_text = sanitize_text(response_text)
+    markdown_content = build_markdown_content(clean_text)
 
     # Convert markdown -> HTML
     html_body = markdown.markdown(markdown_content, extensions=["extra"])
 
-    # Wrap with minimal styling so the PDF doesn't look bare
+    # Wrap with styling. font-family references the registered TTF name
+    # directly -- xhtml2pdf resolves it via the reportlab font registry,
+    # it does NOT look at @font-face/system fonts.
     html_content = f"""
     <html>
     <head>
         <meta charset="utf-8">
         <style>
-            body {{ font-family: Helvetica, Arial, sans-serif; font-size: 12px; line-height: 1.5; color: #1C2321; }}
-            h1 {{ font-size: 22px; color: #C1622D; }}
-            h2 {{ font-size: 17px; color: #2A6F77; margin-top: 20px; }}
+            @font-face {{
+                font-family: "DejaVuSans";
+                src: url("{_FONT_REGULAR}");
+            }}
+            @font-face {{
+                font-family: "DejaVuSans";
+                src: url("{_FONT_BOLD}");
+                font-weight: bold;
+            }}
+            body {{ font-family: "{font_family}", Helvetica, Arial, sans-serif; font-size: 12px; line-height: 1.5; color: #1C2321; }}
+            h1 {{ font-family: "{font_family}", Helvetica, Arial, sans-serif; font-size: 22px; color: #C1622D; }}
+            h2 {{ font-family: "{font_family}", Helvetica, Arial, sans-serif; font-size: 17px; color: #2A6F77; margin-top: 20px; }}
             hr {{ border: none; border-top: 1px solid #ccc; margin: 16px 0; }}
             em {{ color: #555; font-size: 10px; }}
+            table {{ border-collapse: collapse; width: 100%; }}
+            th, td {{ border: 1px solid #ccc; padding: 6px 8px; text-align: left; }}
         </style>
     </head>
     <body>{html_body}</body>

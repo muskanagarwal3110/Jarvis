@@ -69,7 +69,7 @@ export function Chat() {
       </div>
 
       {/* Chat body */}
-      <div className="flex min-h-[420px] flex-col gap-3 overflow-y-auto px-6 py-6 sm:px-8">
+      <div className="flex min-h-105 flex-col gap-3 overflow-y-auto px-6 py-6 sm:px-8">
         <div className="rounded-2xl border border-[#2A6F77]/20 bg-[#2A6F77]/5 px-4 py-3.5 text-[#2A6F77]">
           How can I help you in planning a trip? Let me know where you want to
           visit.
